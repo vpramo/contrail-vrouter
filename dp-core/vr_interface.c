@@ -527,6 +527,113 @@ vhost_drv_add(struct vr_interface *vif)
 }
 /* end vhost driver */
 
+/* vlan driver */
+static int
+vlan_rx(struct vr_interface *vif, struct vr_packet *pkt,
+        unsigned short vlan_id __attribute__((unused)))
+{
+    struct vr_interface_stats *stats = vif_get_stats(vif, pkt->vp_cpu);
+
+    pkt->vp_if = vif;
+
+    stats->vis_ibytes += pkt_len(pkt);
+    stats->vis_ipackets++;
+
+    return vr_interface_input(vif->vif_vrf, vif, pkt);
+}
+
+static int
+vlan_tx(struct vr_interface *vif, struct vr_packet *pkt)
+{
+    int ret;
+    struct vr_interface *pvif;
+    struct vr_interface_stats *stats = vif_get_stats(vif, pkt->vp_cpu);
+
+    stats->vis_obytes += pkt_len(pkt);
+    stats->vis_opackets++;
+
+    pvif = vif->vif_parent;
+    if (!pvif)
+        goto drop;
+
+    pkt->vp_if = pvif;
+
+    ret = pvif->vif_tx(pvif, pkt);
+    if (ret < 0) {
+        ret = 0;
+        goto drop;
+    }
+
+    return ret;
+
+drop:
+    vr_pfree(pkt, VP_DROP_INVALID_IF);
+    stats->vis_oerrors++;
+
+    return ret;
+}
+
+static int
+vlan_drv_del(struct vr_interface *vif)
+{
+    struct vr_interface *pvif;
+
+    pvif = vif->vif_parent;
+    if (!pvif)
+        return 0;
+
+    if (pvif->vif_driver->drv_delete_sub_interface)
+        pvif->vif_driver->drv_delete_sub_interface(pvif, vif);
+
+    return 0;
+}
+
+static int
+vlan_drv_add(struct vr_interface *vif, vr_interface_req *vifr)
+{
+    int ret;
+    struct vr_interface *pvif = NULL;
+
+    if ((unsigned int)(vifr->vifr_parent_vif_idx) > VR_MAX_INTERFACES)
+        return -EINVAL;
+
+    if ((unsigned short)(vifr->vifr_vlan_id) >= VLAN_ID_MAX)
+        return -EINVAL;
+
+    if (!vif->vif_mtu)
+        vif->vif_mtu = 1514;
+
+    vif->vif_set_rewrite = vif_cmn_rewrite;
+    vif->vif_tx = vlan_tx;
+    vif->vif_rx = vlan_rx;
+    vif->vif_vlan_id = vifr->vifr_vlan_id;
+
+    pvif = vrouter_get_interface(vifr->vifr_rid, vifr->vifr_parent_vif_idx);
+    if (!pvif)
+        return -EINVAL;
+
+    vif->vif_parent = pvif;
+    if (!pvif->vif_driver->drv_add_sub_interface) {
+        ret = -EINVAL;
+        goto add_fail;
+    }
+
+    ret = pvif->vif_driver->drv_add_sub_interface(pvif, vif);
+    if (ret)
+        goto add_fail;
+
+    return 0;
+
+add_fail:
+    if (pvif) {
+        vif->vif_parent = NULL;
+        vrouter_put_interface(pvif);
+    }
+
+    return ret;
+}
+/* end vlan driver */
+
 /* eth driver */
 static int
 eth_srx(struct vr_interface *vif, struct vr_packet *pkt,

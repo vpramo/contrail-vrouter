@@ -21,9 +21,11 @@
 #define VIF_TYPE_STATS              7
 #define VIF_TYPE_MAX                8
 
-#define vif_is_fabric(vif)          ((vif->vif_type == VIF_TYPE_PHYSICAL) ||\
-                                        (vif->vif_type == VIF_TYPE_VLAN))
-
+#define vif_is_virtual(vif)         ((vif->vif_type == VIF_TYPE_VIRTUAL) ||\
+                                        (vif->vif_type == VIF_TYPE_VIRTUAL_VLAN))
+#define vif_is_fabric(vif)          (vif->vif_type == VIF_TYPE_PHYSICAL) 
+#define vif_is_vlan(vif)            ((vif->vif_type == VIF_TYPE_VIRTUAL_VLAN))
+                                        
 #define vif_is_tap(vif)             ((vif->vif_type == VIF_TYPE_VIRTUAL) ||\
                                         (vif->vif_type == VIF_TYPE_AGENT))
 
