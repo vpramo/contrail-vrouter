@@ -9,6 +9,8 @@
 
 extern bool vr_not_ready;
 
+extern bool vr_not_ready;
+
 static char *
 vr_message_default_malloc(unsigned int size)
 {
@@ -56,6 +58,9 @@ vr_message_request(struct vr_message *message)
 {
     if (!message_h.vm_proto)
         return 0;
+
+    if (vr_not_ready)
+        return -EBADFD;
 
     if (vr_not_ready)
         return -EBADFD;

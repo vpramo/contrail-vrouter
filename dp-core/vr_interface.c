@@ -527,6 +527,8 @@ vlan_rx(struct vr_interface *vif, struct vr_packet *pkt,
 {
     struct vr_interface_stats *stats = vif_get_stats(vif, pkt->vp_cpu);
 
+    pkt->vp_if = vif;
+
     stats->vis_ibytes += pkt_len(pkt);
     stats->vis_ipackets++;
 
@@ -546,6 +548,8 @@ vlan_tx(struct vr_interface *vif, struct vr_packet *pkt)
     pvif = vif->vif_parent;
     if (!pvif)
         goto drop;
+
+    pkt->vp_if = pvif;
 
     ret = pvif->vif_tx(pvif, pkt);
     if (ret < 0) {
