@@ -1057,8 +1057,8 @@ vrouter_add_interface(struct vr_interface *vif, vr_interface_req *vifr)
 void
 vif_attach(struct vr_interface *vif)
 {
-    if (drivers[vif->vif_type].drv_add)
-        drivers[vif->vif_type].drv_add(vif);
+    if (vif_drivers[vif->vif_type].drv_add)
+        vif_drivers[vif->vif_type].drv_add(vif, NULL);
 
     return;
 }
@@ -1066,8 +1066,8 @@ vif_attach(struct vr_interface *vif)
 void
 vif_detach(struct vr_interface *vif)
 {
-    if (drivers[vif->vif_type].drv_delete)
-        drivers[vif->vif_type].drv_delete(vif);
+    if (vif_drivers[vif->vif_type].drv_delete)
+        vif_drivers[vif->vif_type].drv_delete(vif);
 
     return; 
 }
@@ -1217,7 +1217,7 @@ vr_interface_add(vr_interface_req *req, bool need_response)
      */
     vif->vif_rx = vif_discard_rx;
     vif->vif_tx = vif_discard_tx;
-    ret = vrouter_add_interface(vif);
+    ret = vrouter_add_interface(vif, req);
     if (ret)
         goto generate_resp;
 
