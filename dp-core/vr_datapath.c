@@ -66,7 +66,7 @@ vr_handle_arp_request(struct vrouter *router, unsigned short vrf,
      * Vhost - xconnected above
      */
     if (vr_grat_arp(sarp)) {
-        if (vif->vif_type == VIF_TYPE_VIRTUAL) {
+        if (vif_is_virtual(vif)) {
             vr_pfree(pkt, VP_DROP_GARP_FROM_VM);
             return 0;
         }
@@ -233,7 +233,7 @@ vr_l3_input(unsigned short vrf, struct vr_packet *pkt,
     pkt_set_inner_network_header(pkt, pkt->vp_data);
     if (eth_proto == VR_ETH_PROTO_IP) {
         if (vr_from_vm_mss_adj && vr_pkt_from_vm_tcp_mss_adj &&
-                            (vif->vif_type == VIF_TYPE_VIRTUAL)) {
+                            vif_is_virtual(vif)) {
             if ((reason = vr_pkt_from_vm_tcp_mss_adj(pkt))) {
                 vr_pfree(pkt, reason);
                 return 0;
