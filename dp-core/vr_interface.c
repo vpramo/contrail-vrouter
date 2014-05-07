@@ -126,13 +126,15 @@ vr_interface_service_enable(struct vr_interface *vif)
      * from agent
      */
     if (!vif->vif_vrf_table) {
-        vif->vif_vrf_table = vr_malloc(sizeof(short) *
+        vif->vif_vrf_table = vr_malloc(sizeof(struct vr_vrf_assign) *
                 VIF_VRF_TABLE_ENTRIES);
         if (!vif->vif_vrf_table)
             return -ENOMEM;
 
-        for (i = 0; i < VIF_VRF_TABLE_ENTRIES; i++)
-            vif->vif_vrf_table[i] = -1;
+        for (i = 0; i < VIF_VRF_TABLE_ENTRIES; i++) {
+            vif->vif_vrf_table[i].va_vrf = -1;
+            vif->vif_vrf_table[i].va_nh_id = 0;
+        }
 
         /* for the new table, there are no users */
         vif->vif_vrf_table_users = 0;
@@ -370,6 +372,7 @@ agent_send(struct vr_interface *vif, struct vr_packet *pkt,
     struct vr_packet *pkt_c;
     struct agent_send_params *params =
         (struct agent_send_params *)ifspecific;
+    struct vr_flow_trap_arg *fta;
 
     vr_preset(pkt);
 
@@ -397,6 +400,13 @@ agent_send(struct vr_interface *vif, struct vr_packet *pkt,
 
     switch (params->trap_reason) {
     case AGENT_TRAP_FLOW_MISS:
+        if (params->trap_param) {
+            fta = (struct vr_flow_trap_arg *)(params->trap_param);
+            hdr->hdr_cmd_param = htonl(fta->vfta_index);
+            hdr->hdr_nh = htonl(fta->vfta_nh_index);
+        }
+        break;
+
     case AGENT_TRAP_ECMP_RESOLVE:
     case AGENT_TRAP_SOURCE_MISMATCH:
         if (params->trap_param)
@@ -542,7 +552,7 @@ eth_srx(struct vr_interface *vif, struct vr_packet *pkt,
     if (vlan_id >= VIF_VRF_TABLE_ENTRIES)
         vrf = vif->vif_vrf;
     else
-        vrf = vif->vif_vrf_table[vlan_id];
+        vrf = vif->vif_vrf_table[vlan_id].va_vrf;
 
     return vr_interface_input(vrf, vif, pkt);
 }
@@ -984,6 +994,8 @@ vr_interface_change(struct vr_interface *vif, vr_interface_req *req)
     if (req->vifr_mtu)
         vif->vif_mtu = req->vifr_mtu;
 
+    vif->vif_nh_id = (unsigned short)req->vifr_nh_id;
+
     return 0;
 }
 
@@ -1036,6 +1048,7 @@ vr_interface_add(vr_interface_req *req, bool need_response)
     vif->vif_idx = req->vifr_idx;
     vif->vif_os_idx = req->vifr_os_idx;
     vif->vif_rid = req->vifr_rid;
+    vif->vif_nh_id = (unsigned short)req->vifr_nh_id;
 
     if ((req->vifr_mac_size != sizeof(vif->vif_mac)) || !req->vifr_mac) {
         ret = -EINVAL;
@@ -1290,7 +1303,8 @@ vif_vrf_table_get(struct vr_interface *vif, vr_vrf_assign_req *req)
     if (req->var_vlan_id >= VIF_VRF_TABLE_ENTRIES)
         return -EINVAL;
 
-    req->var_vif_vrf = vif->vif_vrf_table[req->var_vlan_id];
+    req->var_vif_vrf = vif->vif_vrf_table[req->var_vlan_id].va_vrf;
+    req->var_nh_id = vif->vif_vrf_table[req->var_vlan_id].va_nh_id;
     return 0;
 }
 
@@ -1305,7 +1319,7 @@ vif_vrf_table_get(struct vr_interface *vif, vr_vrf_assign_req *req)
  */
 int
 vif_vrf_table_set(struct vr_interface *vif, unsigned int vlan,
-        short vrf)
+        short vrf, unsigned short nh_id)
 {
     int ret = 0;
 
@@ -1337,7 +1351,7 @@ vif_vrf_table_set(struct vr_interface *vif, unsigned int vlan,
      * decrement reference count only when the old entry was >= 0
      * and the new entry is < 0
      */
-    if (vif->vif_vrf_table[vlan] < 0) {
+    if (vif->vif_vrf_table[vlan].va_vrf < 0) {
         if (vrf >= 0)
             vif->vif_vrf_table_users++;
     } else {
@@ -1345,7 +1359,7 @@ vif_vrf_table_set(struct vr_interface *vif, unsigned int vlan,
             vif->vif_vrf_table_users--;
     }
 
-    vif->vif_vrf_table[vlan] = vrf;
+    vif->vif_vrf_table[vlan].va_vrf = vrf;
 
     /*
      * on last delete, if the service flag is not set, free
