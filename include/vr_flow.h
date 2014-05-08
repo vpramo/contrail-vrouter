@@ -36,8 +36,6 @@
 #define VR_FLOW_FLAG_TRAP_ECMP      0x20
 #define VR_FLOW_FLAG_TRAP_MASK      (VR_FLOW_FLAG_TRAP_ECMP)
 
-#define VR_FLOW_FLAG_NO_RPF         0x40
-
 struct vr_forwarding_md;
 
 struct vr_flow_key {
