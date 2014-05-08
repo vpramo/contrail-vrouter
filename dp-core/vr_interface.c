@@ -76,6 +76,11 @@ vr_interface_input(unsigned short vrf, struct vr_interface *vif,
         vr_mirror(vif->vif_router, vif->vif_mirror_id, pkt, &fmd);
     }
 
+    if (vif->vif_vrf_table) {
+        fmd.fmd_vlan = vlan_id;
+        vlan_id = VLAN_ID_INVALID;
+    }
+
     /* If vlan_id is present L3 packet needs to be treated as L2 packet */
     if (vlan_id == VLAN_ID_INVALID) {
         if (vif->vif_flags & VIF_FLAG_L3_ENABLED) {
@@ -1294,10 +1299,22 @@ error:
     return;
 }
 
+unsigned int
+vif_vrf_table_get_nh(struct vr_interface *vif, unsigned short vlan)
+{
+    if (vlan >= VLAN_ID_INVALID || !vif_is_service(vif))
+        return vif->vif_nh_id;
+
+    if (!vif->vif_vrf_table)
+        return vif->vif_nh_id;
+
+    return vif->vif_vrf_table[vlan].va_nh_id;
+}
+
 int
 vif_vrf_table_get(struct vr_interface *vif, vr_vrf_assign_req *req)
 {
-    if (!(vif->vif_flags & VIF_FLAG_SERVICE_IF))
+    if (!vif_is_service(vif))
         return -EINVAL;
 
     if (!vif->vif_vrf_table)
@@ -1334,7 +1351,7 @@ vif_vrf_table_set(struct vr_interface *vif, unsigned int vlan,
          * 2. service flag is set and we were not able to allocate
          *    the table
          */
-        if (!(vif->vif_flags & VIF_FLAG_SERVICE_IF)) {
+        if (!vif_is_service(vif)) {
             ret = vr_interface_service_enable(vif);
             if (ret)
                 return ret;
@@ -1363,6 +1380,7 @@ vif_vrf_table_set(struct vr_interface *vif, unsigned int vlan,
     }
 
     vif->vif_vrf_table[vlan].va_vrf = vrf;
+    vif->vif_vrf_table[vlan].va_nh_id = nh_id;
 
     /*
      * on last delete, if the service flag is not set, free

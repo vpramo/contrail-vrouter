@@ -32,6 +32,7 @@
 #define vif_is_vhost(vif)           ((vif->vif_type == VIF_TYPE_HOST) ||\
                                         (vif->vif_type == VIF_TYPE_XEN_LL_HOST) ||\
                                         (vif->vif_type == VIF_TYPE_GATEWAY))
+#define vif_is_service(vif)         (vif->vif_flags & VIF_FLAG_SERVICE_IF)
 
 #define VR_INTERFACE_NAME_LEN       64
 
@@ -156,6 +157,7 @@ extern void vif_remove_xconnect(struct vr_interface *);
 extern int vif_xconnect(struct vr_interface *, struct vr_packet *);
 extern void vif_drop_pkt(struct vr_interface *, struct vr_packet *, bool);
 extern int vif_vrf_table_get(struct vr_interface *, vr_vrf_assign_req *);
+extern unsigned int vif_vrf_table_get_nh(struct vr_interface *, unsigned short);
 extern int vif_vrf_table_set(struct vr_interface *, unsigned int,
         short, unsigned short);
 

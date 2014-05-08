@@ -163,7 +163,7 @@ vr_get_flow_entry(struct vrouter *router, int index)
 }
 
 static inline void
-vr_get_flow_key(struct vr_flow_key *key, struct vr_packet *pkt,
+vr_get_flow_key(struct vr_flow_key *key, uint16_t vlan, struct vr_packet *pkt,
         struct vr_ip *ip, unsigned short sport, unsigned short dport)
 {
     unsigned short *t_hdr;
@@ -173,10 +173,14 @@ vr_get_flow_key(struct vr_flow_key *key, struct vr_packet *pkt,
     memcpy(&key->key_src_ip, &ip->ip_saddr, 2 * sizeof(ip->ip_saddr));
     key->key_proto = ip->ip_proto;
     key->key_zero = 0;
-    if (vif_is_fabric(pkt->vp_if) && pkt->vp_nh)
+
+    if (vif_is_fabric(pkt->vp_if) && pkt->vp_nh) {
         nh_id = pkt->vp_nh->nh_id;
-    else
+    } else if (vif_is_service(pkt->vp_if)) {
+        nh_id = vif_vrf_table_get_nh(pkt->vp_if, vlan);
+    } else {
         nh_id = pkt->vp_if->vif_nh_id;
+    }
 
     key->key_nh_id = nh_id;
 
@@ -483,7 +487,6 @@ vr_flow_action(struct vrouter *router, struct vr_flow_entry *fe,
      * for now, we will not use dvrf if VRFT is set, because the RPF
      * check needs to happen in the source vrf
      */
-
     vr_flow_set_forwarding_md(router, fe, index, fmd);
     src_nh = __vrouter_get_nexthop(router, fe->fe_src_nh_index);
     if (!src_nh) {
@@ -675,6 +678,7 @@ vr_flow_lookup(struct vrouter *router, unsigned short vrf,
             return 0;
         }
 
+        flow_e->fe_vrf = vrf;
         /* mark as hold */
         vr_flow_entry_set_hold(router, flow_e);
         vr_do_flow_action(router, flow_e, fe_index, pkt, proto, fmd);
@@ -812,7 +816,7 @@ vr_flow_inet_input(struct vrouter *router, unsigned short vrf,
 
     if (key_p) {
         /* we have everything to make a key */
-        vr_get_flow_key(key_p, pkt, ip, sport, dport);
+        vr_get_flow_key(key_p, fmd->fmd_vlan, pkt, ip, sport, dport);
         flow_parse_res = vr_flow_parse(router, key_p, pkt, &trap_res);
         if (flow_parse_res == VR_FLOW_LOOKUP && vr_ip_fragment_head(ip))
             vr_fragment_add(router, vrf, ip, key_p->key_src_port,

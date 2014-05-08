@@ -159,6 +159,7 @@ dump_table(struct flow_table *ft)
                 printf("E:%d, ", fe->fe_ecmp_nh_index);
 
             printf("S(nh):%u, ", fe->fe_src_nh_index);
+
             printf(" Statistics:%u/%u", fe->fe_stats.flow_packets,
                     fe->fe_stats.flow_bytes);
             if (fe->fe_flags & VR_FLOW_FLAG_MIRROR) {

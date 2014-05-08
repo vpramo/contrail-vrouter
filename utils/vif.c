@@ -147,7 +147,7 @@ vr_vrf_assign_req_process(void *s)
 {
     vr_vrf_assign_req *req = (vr_vrf_assign_req *)s;
 
-    printf("%d:%d, ", req->var_vlan_id, req->var_vif_vrf);
+    printf("%d:(%d, %d), ", req->var_vlan_id, req->var_vif_vrf, req->var_nh_id);
     var_marker = req->var_vlan_id;
 
     return;
@@ -194,7 +194,8 @@ vr_interface_req_process(void *s)
             vr_get_if_type_string(req->vifr_type),
             MAC_VALUE((uint8_t *)req->vifr_mac), req->vifr_ip);
     vr_interface_print_header();
-    printf("Vrf:%d Flags:%s MTU:%d Ref:%d\n", req->vifr_vrf,
+    printf("Vrf:%d NH:%d Flags:%s MTU:%d Ref:%d\n", req->vifr_vrf,
+            req->vifr_nh_id,
             req->vifr_flags ? vr_if_flags(req->vifr_flags) : "NULL" ,
             req->vifr_mtu, req->vifr_ref_cnt);
     vr_interface_print_header();
@@ -212,7 +213,7 @@ vr_interface_req_process(void *s)
 
     if (get_set && req->vifr_flags & VIF_FLAG_SERVICE_IF) {
         vr_vrf_assign_dump = true;
-        printf("VRF table(vlan:vrf):\n");
+        printf("VRF table(vlan:(vrf, nh)):\n");
         vr_ifindex = req->vifr_idx;
     }
 
