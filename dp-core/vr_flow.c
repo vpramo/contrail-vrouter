@@ -484,7 +484,7 @@ vr_flow_action(struct vrouter *router, struct vr_flow_entry *fe,
     }
 
     if (src_nh->nh_validate_src) {
-        valid_src = src_nh->nh_validate_src(vrf, pkt, src_nh, fmd);
+        valid_src = src_nh->nh_validate_src(vrf, pkt, src_nh, fmd, NULL);
         if (valid_src == NH_SOURCE_INVALID) {
             vr_pfree(pkt, VP_DROP_INVALID_SOURCE);
             return 0;

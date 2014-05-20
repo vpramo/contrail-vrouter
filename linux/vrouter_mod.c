@@ -1701,19 +1701,22 @@ lh_pull_inner_headers(struct vr_ip *outer_iph, struct vr_packet *pkt,
           */
          if (!skb_csum_unnecessary(skb)) {
              if (outer_iph && outer_iph->ip_proto == VR_IP_PROTO_UDP) {
-                 skb_pull_len = pkt_data(pkt) - skb->data;
 
-                 skb_pull(skb, skb_pull_len);
-                 if (lh_csum_verify_udp(skb, outer_iph)) {
-                     goto cksum_err;
+                 if (mpls_pkt) {
+                     skb_pull_len = pkt_data(pkt) - skb->data;
+
+                     skb_pull(skb, skb_pull_len);
+                     if (lh_csum_verify_udp(skb, outer_iph)) {
+                         goto cksum_err;
+                     }
+                     /*
+                      * Restore the skb back to its original state. This is
+                      * required as packets that get trapped to the agent
+                      * assume that the skb is unchanged from the time it
+                      * is received by vrouter.
+                      */
+                     skb_push(skb, skb_pull_len);
                  }
-                 /*
-                  * Restore the skb back to its original state. This is
-                  * required as packets that get trapped to the agent
-                  * assume that the skb is unchanged from the time it
-                  * is received by vrouter.
-                  */
-                 skb_push(skb, skb_pull_len);
                  if (tcph && vr_to_vm_mss_adj) {
                      lh_adjust_tcp_mss(tcph, skb, vrouter_overlay_len);
                  }
