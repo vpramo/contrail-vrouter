@@ -1099,18 +1099,20 @@ lh_pull_inner_headers_fast_udp(struct vr_ip *outer_iph,
      * we don't need to verify the inner packet's checksum.
      */
     if (iph && !skb_csum_unnecessary(skb)) {
-        skb_pull_len = pkt_data(pkt) - skb->data;
 
-        skb_pull(skb, skb_pull_len);
-        if (lh_csum_verify_udp(skb, outer_iph)) {
-            goto cksum_err;
+        if (*encap_type == PKT_ENCAP_MPLS) {
+            skb_pull_len = pkt_data(pkt) - skb->data;
+            skb_pull(skb, skb_pull_len);
+            if (lh_csum_verify_udp(skb, outer_iph)) {
+                goto cksum_err;
+            }
+            /*
+             * Restore the skb back to its original state. This is required as
+             * packets that get trapped to the agent assume that the skb is
+             * unchanged from the time it is received by vrouter.
+             */
+            skb_push(skb, skb_pull_len);
         }
-        /*
-         * Restore the skb back to its original state. This is required as
-         * packets that get trapped to the agent assume that the skb is
-         * unchanged from the time it is received by vrouter.
-         */
-        skb_push(skb, skb_pull_len);
     }
 
     if ((*encap_type == PKT_ENCAP_VXLAN) ||
