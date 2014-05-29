@@ -92,6 +92,7 @@ vr_interface_input(unsigned short vrf, struct vr_interface *vif,
         return 0;
     }
 
+    /* Route IP packet only if destined to us */
     if (eth_proto == VR_ETH_PROTO_IP) {
         if (vr_my_mac(data, vif)) {
             if (!pkt_pull(pkt, pull_len)) {
@@ -102,14 +103,30 @@ vr_interface_input(unsigned short vrf, struct vr_interface *vif,
         }
     }
 
+    /*
+     * Fall back bridging:
+     * Either not IPV4 packet or not destined to us or multicast traffic
+     */
     if (eth_proto == VR_ETH_PROTO_ARP) {
         arph = (struct vr_arp *)(pkt_data(pkt) + pull_len);
         return vr_arp_input(vif->vif_router, vrf, pkt, arph, vlan_id, &fmd);
     } else {
         untrapped = vr_trap_well_known_packets(vrf, pkt, eth_proto,
                                                (pkt_data(pkt) + pull_len));
+
+         /*
+          * If Agent is not interested in the traffic, bridge if L2 enabled,
+          * if L2 not not ebabled, and multicast ip traffic, subject it to
+          * L3 processing
+          */
         if (untrapped) {
-            return vr_l2_input(vrf, pkt, &fmd, vlan_id);
+            if (vif->vif_flags & VIF_FLAG_L2_ENABLED)
+                return vr_l2_input(vrf, pkt, &fmd, vlan_id, eth_proto,
+                                        (pkt_data(pkt) + pull_len));
+            else if (eth_proto == VR_ETH_PROTO_IP && IS_MAC_BMCAST(data))
+                return vr_l3_input(vrf, pkt, &fmd);
+            else
+                vif_drop_pkt(vif, pkt, 1);
         }
     }
 

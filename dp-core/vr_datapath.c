@@ -245,12 +245,14 @@ vr_arp_input(struct vrouter *router, unsigned short vrf,
 
     /* If we are "L2 Only", lets bridge even ARP packets */
     if (!(pkt->vp_if->vif_flags & VIF_FLAG_L3_ENABLED))
-        return vr_l2_input(vrf, pkt, fmd, vlan_id);
+        return vr_l2_input(vrf, pkt, fmd, vlan_id,
+                              VR_ETH_PROTO_ARP, (unsigned char *)arp_hdr);
 
     /* If vlan tagged packet from VM, we bridge it */
     if (pkt->vp_if->vif_type == VIF_TYPE_VIRTUAL &&
                                 vlan_id != VLAN_ID_INVALID)
-        return vr_l2_input(vrf, pkt, fmd, vlan_id);
+        return vr_l2_input(vrf, pkt, fmd, vlan_id,
+                              VR_ETH_PROTO_ARP, (unsigned char *)arp_hdr);
 
     memcpy(&sarp, arp_hdr, sizeof(struct vr_arp));
     switch (ntohs(sarp.arp_op)) {
@@ -319,7 +321,11 @@ vr_trap_well_known_packets(unsigned short vrf, struct vr_packet *pkt,
     struct vr_ip *iph;
     struct vr_udp *udph;
 
-    if (well_known_mac(data) && (vif->vif_flags & VIF_FLAG_L3_ENABLED)) {
+    if (!(vif->vif_flags & VIF_FLAG_L3_ENABLED)) {
+        return -1;
+    }
+
+    if (well_known_mac(data)) {
         vr_trap(pkt, vrf,  AGENT_TRAP_L2_PROTOCOLS, NULL);
         return 0;
     }

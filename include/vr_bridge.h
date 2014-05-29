@@ -45,6 +45,7 @@ vr_bridge_input(struct vrouter *, unsigned short , struct vr_packet *,
                             struct vr_forwarding_md *);
 unsigned int
 vr_l2_input(unsigned short , struct vr_packet *,
-                struct vr_forwarding_md *, unsigned short);
+            struct vr_forwarding_md *, unsigned short,
+            unsigned short, unsigned char *);
 
 #endif

@@ -403,12 +403,12 @@ vr_bridge_input(struct vrouter *router, unsigned short vrf,
 
 unsigned int
 vr_l2_input(unsigned short vrf, struct vr_packet *pkt, 
-                struct vr_forwarding_md *fmd, unsigned short vlan_id)
+            struct vr_forwarding_md *fmd, unsigned short vlan_id,
+            unsigned short eth_proto, unsigned char *l3_hdr)
 {
     unsigned char *new_hdr, *old_hdr;
     struct vr_vlan_hdr *vlanh;
     struct vr_eth *eth;
-    unsigned short eth_proto;
     int pull_len;
     int reason;
 
@@ -428,11 +428,14 @@ vr_l2_input(unsigned short vrf, struct vr_packet *pkt,
         vlanh->vlan_tag = htons(vlan_id);
     }
 
-    /* Mark the network header if an L3 packet */
-    pull_len = vr_get_eth_proto(pkt, &eth_proto);
-    if (pull_len < 0) {
-        vif_drop_pkt(pkt->vp_if, pkt, 1);
-        return 0;
+    if (l3_hdr && eth_proto) {
+        pull_len = l3_hdr - pkt_data(pkt);
+    } else {
+        pull_len = vr_get_eth_proto(pkt, &eth_proto);
+        if (pull_len < 0) {
+             vif_drop_pkt(pkt->vp_if, pkt, 1);
+             return 0;
+        }
     }
 
     /* Even in L2 mode we will have to adjust the MSS for TCP*/
@@ -442,6 +445,7 @@ vr_l2_input(unsigned short vrf, struct vr_packet *pkt,
             return 0;
         }
 
+        /* Mark the network header if an L3 packet */
         pkt_set_network_header(pkt, (pkt->vp_data + pull_len));
         pkt_set_inner_network_header(pkt, (pkt->vp_data+ pull_len));
         if (vr_from_vm_mss_adj && vr_pkt_from_vm_tcp_mss_adj &&
