@@ -7,6 +7,7 @@
 #include "vr_message.h"
 #include "vr_sandesh.h"
 #include "vr_mirror.h"
+#include "vr_datapath.h"
 
 static struct vr_host_interface_ops *hif_ops;
 
@@ -16,10 +17,6 @@ static int eth_rx(struct vr_interface *, struct vr_packet *, unsigned short);
 extern struct vr_host_interface_ops *vr_host_interface_init(void);
 extern void  vr_host_interface_exit(void);
 extern void vr_host_vif_init(struct vrouter *);
-extern unsigned int vr_l3_input(unsigned short, struct vr_packet *, 
-                                              struct vr_forwarding_md *);
-extern unsigned int vr_l2_input(unsigned short, struct vr_packet *, 
-                                               struct vr_forwarding_md *, unsigned short);
 
 #define MINIMUM(a, b) (((a) < (b)) ? (a) : (b))
 
@@ -57,6 +54,16 @@ vif_drop_pkt(struct vr_interface *vif, struct vr_packet *pkt, bool input)
     return;
 }
 
+static inline bool
+vr_my_mac(unsigned char *pkt_mac, struct vr_interface *vif)
+{
+    if (VR_MAC_CMP(pkt_mac, vif->vif_mac) ||
+                 vif->vif_type == VIF_TYPE_HOST)
+        return true;
+
+    return false;
+}
+
 /*
  * vr_interface_input() is invoked if a packet ingresses an interface. 
  * This function demultiplexes the packet to right input 
@@ -67,7 +74,10 @@ vr_interface_input(unsigned short vrf, struct vr_interface *vif,
                        struct vr_packet *pkt, unsigned short vlan_id)
 {
     struct vr_forwarding_md fmd;
-    unsigned int ret;
+    unsigned char *data = pkt_data(pkt);
+    unsigned short pull_len, eth_proto;
+    int untrapped;
+    struct vr_arp *arph;
 
     vr_init_forwarding_md(&fmd);
 
@@ -76,19 +86,33 @@ vr_interface_input(unsigned short vrf, struct vr_interface *vif,
         vr_mirror(vif->vif_router, vif->vif_mirror_id, pkt, &fmd);
     }
 
-    /* If vlan tagged from VM, packet needs to be treated as L2 packet */
-    if ((vif->vif_type == VIF_TYPE_PHYSICAL) ||  (vlan_id == VLAN_ID_INVALID)) {
-        if (vif->vif_flags & VIF_FLAG_L3_ENABLED) {
-            ret = vr_l3_input(vrf, pkt, &fmd);
-            if (ret != PKT_RET_FALLBACK_BRIDGING)
-                return ret;
+    pull_len = vr_get_eth_proto(pkt, &eth_proto);
+    if (pull_len < 0) {
+        vif_drop_pkt(vif, pkt, 1);
+        return 0;
+    }
+
+    if (eth_proto == VR_ETH_PROTO_IP) {
+        if (vr_my_mac(data, vif)) {
+            if (!pkt_pull(pkt, pull_len)) {
+                vif_drop_pkt(vif, pkt, 1);
+                return 0;
+            }
+            return vr_l3_input(vrf, pkt, &fmd);
         }
     }
 
-    if (vif->vif_flags & VIF_FLAG_L2_ENABLED)
-        return vr_l2_input(vrf, pkt, &fmd, vlan_id);
+    if (eth_proto == VR_ETH_PROTO_ARP) {
+        arph = (struct vr_arp *)(pkt_data(pkt) + pull_len);
+        return vr_arp_input(vif->vif_router, vrf, pkt, arph, vlan_id, &fmd);
+    } else {
+        untrapped = vr_trap_well_known_packets(vrf, pkt, eth_proto,
+                                               (pkt_data(pkt) + pull_len));
+        if (untrapped) {
+            return vr_l2_input(vrf, pkt, &fmd, vlan_id);
+        }
+    }
 
-    vif_drop_pkt(vif, pkt, 1);
     return 0;
 }
 

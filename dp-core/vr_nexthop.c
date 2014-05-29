@@ -8,6 +8,7 @@
 #include "vr_sandesh.h"
 #include "vr_mcast.h"
 #include "vr_bridge.h"
+#include "vr_datapath.h"
 
 static int nh_discard(unsigned short, struct vr_packet *,
         struct vr_nexthop *, struct vr_forwarding_md *);

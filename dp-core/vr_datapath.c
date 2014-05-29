@@ -4,20 +4,12 @@
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
 #include <vr_os.h>
+#include <vr_bridge.h>
+#include <vr_datapath.h>
 
-unsigned char vr_bcast_mac[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-unsigned char vr_well_known_mac_infix[] = { 0x80, 0xc2 };
+extern struct vr_nexthop *(*vr_inet_route_lookup)(unsigned int,
+                struct vr_route_req *, struct vr_packet *);
 
-static inline bool
-well_known_mac(unsigned char *dmac)
-{
-    if (!memcmp(&dmac[VR_ETHER_PROTO_MAC_OFF], vr_well_known_mac_infix,
-                            VR_ETHER_PROTO_MAC_LEN)) 
-        if (!*dmac || (*dmac == 0x1))
-            return true;
-
-    return false;
-}
 
 static inline bool
 vr_grat_arp(struct vr_arp *sarp)
@@ -27,17 +19,34 @@ vr_grat_arp(struct vr_arp *sarp)
     return false;
 }
 
+
 static int
-vr_handle_arp_request(struct vrouter *router, unsigned short vrf,
-        struct vr_arp *sarp, struct vr_packet *pkt)
+vr_arp_request_treatment(struct vr_interface *vif, struct vr_arp *arp,
+                                                   struct vr_nexthop **ret_nh)
 {
-    struct vr_packet *cloned_pkt;
-    struct vr_interface *vif = pkt->vp_if;
-    unsigned short proto = htons(VR_ETH_PROTO_ARP);
-    struct vr_eth *eth;
-    struct vr_arp *arp;
-    unsigned int dpa;
-    bool should_proxy = false;
+    struct vr_route_req rt;
+    struct vr_nexthop *nh;
+
+    /*
+     * Packet from VM :
+     *       - If no source address DROP
+     *       - If L3 route exists PROXY
+     *       - If no L3 route FLOOD
+     *       - If no route DROP
+     *       - If GRAT ARP, ideally should be flooded to hosts behind TOR
+     *             but dropped as of now
+     *
+     * Packet from Vhost
+     *       - If to Link Local IP PROXY
+     *       - else Xconnect including GRAT
+     *
+     * Packet from Fabric
+     *       - If to Vhost IP Proxy
+     *       - If grat ARP Trap to Agent and Xconnect
+     *       - else DROP
+     *
+     * Packet from Xen or VGW, PROXY
+     */
 
     /* 
      * still @ l2 level, and hence we can use the mode of the interface
@@ -45,40 +54,85 @@ vr_handle_arp_request(struct vrouter *router, unsigned short vrf,
      * mode, just pass it to the peer so that he can handle the arp requests
      */
     if (vif_mode_xconnect(vif))
-        return vif_xconnect(vif, pkt);
+        return PKT_ARP_XCONNECT;
 
-    should_proxy = vr_should_proxy(vif, sarp->arp_dpa, sarp->arp_spa);
 
-    /*
-     * if vr should not proxy, all the other arp requests should go out on
-     * the physical interface
-     */
-    if (vif->vif_type == VIF_TYPE_HOST && !should_proxy)
-       return vif_xconnect(vif, pkt);
+    if (vif->vif_type == VIF_TYPE_VIRTUAL && !arp->arp_spa)
+        /*
+         * some OSes send arp queries with zero SIP before taking ownership
+         * of the DIP
+         */
+        return PKT_ARP_DROP;
 
-    /*
-     * grat arp from
-     *
-     * VMs - need to be dropped
-     * Fabric - need to be xconnected and also sent to agent
-     * Vhost - xconnected above
-     */
-    if (vr_grat_arp(sarp)) {
-        if (vif->vif_type == VIF_TYPE_VIRTUAL) {
-            vr_pfree(pkt, VP_DROP_GARP_FROM_VM);
-            return 0;
-        }
+    if (vif->vif_type == VIF_TYPE_XEN_LL_HOST ||
+            vif->vif_type == VIF_TYPE_GATEWAY)
+        return PKT_ARP_PROXY;
 
-        cloned_pkt = vr_pclone(pkt);
-        if (cloned_pkt) {
-            vr_preset(cloned_pkt);
-            vif_xconnect(vif, cloned_pkt);
-        }
-
-        return vr_trap(pkt, vrf, AGENT_TRAP_ARP, NULL);
+    if (vif->vif_type == VIF_TYPE_HOST) {
+        if (IS_LINK_LOCAL_IP(arp->arp_dpa))
+            return PKT_ARP_PROXY;
     }
 
-    if (should_proxy) {
+    if (vr_grat_arp(arp)) {
+        if (vif->vif_type == VIF_TYPE_PHYSICAL)
+            return PKT_ARP_TRAP_XCONNECT;
+        return PKT_ARP_DROP;
+    }
+
+    /*
+     * following cases are handled below
+     * - requests from fabric to vhost IP
+     * - requests from fabric to a VM that has an IP in the fabric and
+     *   is hosted in this system
+     * - requests from vhost to a VM that has an IP in the fabric and
+     *   in the same system
+     */
+    rt.rtr_req.rtr_vrf_id = vif->vif_vrf;
+    rt.rtr_req.rtr_prefix = ntohl(arp->arp_dpa);
+    rt.rtr_req.rtr_prefix_len = 32;
+    rt.rtr_req.rtr_nh_id = 0;
+    rt.rtr_req.rtr_label_flags = 0;
+
+    nh = vr_inet_route_lookup(vif->vif_vrf, &rt, NULL);
+    if (!nh || nh->nh_type == NH_DISCARD)
+        return PKT_ARP_DROP;
+
+    if (rt.rtr_req.rtr_label_flags & VR_RT_HOSTED_FLAG)
+        return PKT_ARP_PROXY;
+
+    if (nh->nh_type == NH_TUNNEL)
+        return PKT_ARP_PROXY;
+
+    if ((nh->nh_type == NH_COMPOSITE) &&
+            (nh->nh_flags & NH_FLAG_COMPOSITE_EVPN)) {
+        if (ret_nh)
+            *ret_nh = nh;
+        return PKT_ARP_FLOOD;
+    }
+
+    if (vif->vif_type == VIF_TYPE_HOST)
+        return PKT_ARP_XCONNECT;
+
+    return PKT_ARP_DROP;
+}
+
+static int
+vr_handle_arp_request(struct vrouter *router, unsigned short vrf,
+        struct vr_arp *sarp, struct vr_packet *pkt, struct vr_forwarding_md *fmd)
+{
+    struct vr_packet *cloned_pkt;
+    struct vr_interface *vif = pkt->vp_if;
+    unsigned short proto = htons(VR_ETH_PROTO_ARP);
+    struct vr_eth *eth;
+    struct vr_arp *arp;
+    unsigned int dpa;
+    int arp_result;
+    struct vr_nexthop *nh;
+
+    arp_result = vr_arp_request_treatment(vif, sarp, &nh);
+
+    switch (arp_result) {
+    case PKT_ARP_PROXY:
         pkt_reset(pkt);
 
         eth = (struct vr_eth *)pkt_data(pkt);
@@ -99,8 +153,26 @@ vr_handle_arp_request(struct vrouter *router, unsigned short vrf,
         pkt_pull_tail(pkt, sizeof(*arp));
 
         vif->vif_tx(vif, pkt);
-    } else {
-        /* requests for which vr doesn't have to do anything */
+        break;
+    case PKT_ARP_XCONNECT:
+        vif_xconnect(vif, pkt);
+        break;
+    case PKT_ARP_TRAP_XCONNECT:
+        cloned_pkt = vr_pclone(pkt);
+        if (cloned_pkt) {
+            vr_preset(cloned_pkt);
+            vif_xconnect(vif, cloned_pkt);
+        }
+        vr_trap(pkt, vrf, AGENT_TRAP_ARP, NULL);
+        break;
+    case PKT_ARP_FLOOD:
+        if (nh) {
+            nh_output(vrf, pkt, nh, fmd);
+            break;
+        }
+        /* Fall through */
+    case PKT_ARP_DROP:
+    default:
         vr_pfree(pkt, VP_DROP_ARP_NOT_ME);
     }
 
@@ -136,16 +208,54 @@ vr_handle_arp_reply(struct vrouter *router, unsigned short vrf,
     return vr_trap(pkt, vrf, AGENT_TRAP_ARP, NULL);
 }
 
+int
+vr_get_eth_proto(struct vr_packet *pkt, unsigned short *eproto)
+{
+    unsigned char *data = pkt_data(pkt);
+    unsigned char *eth = data;
+    unsigned short eth_proto;
+    struct vr_vlan_hdr *vlan;
+    unsigned short pull_len;
+
+    pull_len = VR_ETHER_HLEN;
+    if (pkt_head_len(pkt) < pull_len)
+        return -1;
+
+    eth_proto = ntohs(*(unsigned short *)(eth + VR_ETHER_PROTO_OFF));
+    while (eth_proto == VR_ETH_PROTO_VLAN) {
+        if (pkt_head_len(pkt) < (pull_len + sizeof(*vlan)))
+            return -1;
+        vlan = (struct vr_vlan_hdr *)(pkt_data(pkt) + pull_len);
+        eth_proto = ntohs(vlan->vlan_proto);
+        pull_len += sizeof(*vlan);
+    }
+
+    if (eproto)
+        *eproto = eth_proto;
+
+    return pull_len;
+}
+
 unsigned int
 vr_arp_input(struct vrouter *router, unsigned short vrf,
-        struct vr_packet *pkt)
+             struct vr_packet *pkt, struct vr_arp *arp_hdr,
+             unsigned short vlan_id, struct vr_forwarding_md *fmd)
 {
     struct vr_arp sarp;
 
-    memcpy(&sarp, pkt_data(pkt), sizeof(struct vr_arp));
+    /* If we are "L2 Only", lets bridge even ARP packets */
+    if (!(pkt->vp_if->vif_flags & VIF_FLAG_L3_ENABLED))
+        return vr_l2_input(vrf, pkt, fmd, vlan_id);
+
+    /* If vlan tagged packet from VM, we bridge it */
+    if (pkt->vp_if->vif_type == VIF_TYPE_VIRTUAL &&
+                                vlan_id != VLAN_ID_INVALID)
+        return vr_l2_input(vrf, pkt, fmd, vlan_id);
+
+    memcpy(&sarp, arp_hdr, sizeof(struct vr_arp));
     switch (ntohs(sarp.arp_op)) {
     case VR_ARP_OP_REQUEST:
-        vr_handle_arp_request(router, vrf, &sarp, pkt);
+        vr_handle_arp_request(router, vrf, &sarp, pkt, fmd);
         break;
 
     case VR_ARP_OP_REPLY:
@@ -180,93 +290,53 @@ vr_trap(struct vr_packet *pkt, unsigned short trap_vrf,
     return 0;
 }
 
-int
-vr_reach_l3_hdr(struct vr_packet *pkt, unsigned short *eproto)
-{
-    unsigned char *data = pkt_data(pkt);
-    unsigned char *eth = data;
-    unsigned short eth_proto;
-    struct vr_vlan_hdr *vlan;
-    unsigned short pull_len = 0;
-
-    data = pkt_pull(pkt, VR_ETHER_HLEN);
-    if (!data) {
-        return -1;
-    }
-
-    pull_len += VR_ETHER_HLEN;
-
-    eth_proto = ntohs(*(unsigned short *)(eth + VR_ETHER_PROTO_OFF));
-    while (eth_proto == VR_ETH_PROTO_VLAN) {
-        vlan = (struct vr_vlan_hdr *)data;
-        eth_proto = ntohs(vlan->vlan_proto);
-        data = pkt_pull(pkt, sizeof(*vlan));
-        if (!data) {
-            return -1;
-        }
-        pull_len += sizeof(*vlan);
-    }
-
-    if (eproto)
-        *eproto = eth_proto;
-
-    return pull_len;
-}
 
 unsigned int
 vr_l3_input(unsigned short vrf, struct vr_packet *pkt,
                               struct vr_forwarding_md *fmd)
 {
-
-    unsigned char *data = pkt_data(pkt);
-    unsigned char *eth = data;
-    unsigned char *dmac = &eth[VR_ETHER_DMAC_OFF];
-    unsigned short eth_proto = 0;
     int reason;
-    int pull_len;
     struct vr_interface *vif = pkt->vp_if;
-    struct vrouter *router = vif->vif_router;
-    /*
-     * we will optimise for the most likely case i.e that of IPv4. need
-     * to see what needs to happen for v6 when it comes
-     */
-
-    pull_len = vr_reach_l3_hdr(pkt, &eth_proto);
-    if (pull_len < 0) {
-        vif_drop_pkt(vif, pkt, 1);
-        return 0;
-    }
-
-    data = pkt_data(pkt);
-    if (!data) {
-        vif_drop_pkt(vif, pkt, 1);
-        return 0;
-    }
 
     pkt_set_network_header(pkt, pkt->vp_data);
     pkt_set_inner_network_header(pkt, pkt->vp_data);
-    if (eth_proto == VR_ETH_PROTO_IP) {
-        if (vr_from_vm_mss_adj && vr_pkt_from_vm_tcp_mss_adj &&
+    if (vr_from_vm_mss_adj && vr_pkt_from_vm_tcp_mss_adj &&
                             (vif->vif_type == VIF_TYPE_VIRTUAL)) {
-            if ((reason = vr_pkt_from_vm_tcp_mss_adj(pkt, VROUTER_OVERLAY_LEN))) {
-                vr_pfree(pkt, reason);
-                return 0;
-            }
-         }
-         return vr_flow_inet_input(router, vrf, pkt, eth_proto, fmd);
-    } else if (eth_proto == VR_ETH_PROTO_ARP)
-        return vr_arp_input(router, vrf, pkt);
+        if ((reason = vr_pkt_from_vm_tcp_mss_adj(pkt, VROUTER_OVERLAY_LEN))) {
+            vr_pfree(pkt, reason);
+            return 0;
+        }
+    }
+    return vr_flow_inet_input(vif->vif_router, vrf, pkt, VR_ETH_PROTO_IP, fmd);
+}
 
-    /* rest of the stuff is for slow path and we should be ok doing this */
-    if (well_known_mac(dmac))
-        return vr_trap(pkt, vrf,  AGENT_TRAP_L2_PROTOCOLS, NULL);
+int
+vr_trap_well_known_packets(unsigned short vrf, struct vr_packet *pkt,
+                            unsigned short eth_proto, unsigned char *l3_hdr)
+{
+    unsigned char *data = pkt_data(pkt);
+    struct vr_interface *vif = pkt->vp_if;
+    struct vr_ip *iph;
+    struct vr_udp *udph;
 
-    /* Get the L2 headers back */
-    if (!pkt_push(pkt, pull_len)) {
-        vif_drop_pkt(vif, pkt, 1);
+    if (well_known_mac(data) && (vif->vif_flags & VIF_FLAG_L3_ENABLED)) {
+        vr_trap(pkt, vrf,  AGENT_TRAP_L2_PROTOCOLS, NULL);
         return 0;
     }
 
-    /* The packets is not handled. Might need to be bridged ..*/
-    return PKT_RET_FALLBACK_BRIDGING;
+    if (eth_proto == VR_ETH_PROTO_IP && IS_MAC_BMCAST(data) &&
+                          pkt->vp_if->vif_type == VIF_TYPE_VIRTUAL) {
+        iph = (struct vr_ip *)(l3_hdr);
+        if ((iph->ip_proto == VR_IP_PROTO_UDP) &&
+                              vr_ip_transport_header_valid(iph)) {
+            udph = (struct vr_udp *)(l3_hdr + iph->ip_hl * 4);
+            if (udph->udp_sport == htons(68)) {
+                vr_trap(pkt, vrf,  AGENT_TRAP_L3_PROTOCOLS, NULL);
+                return 0;
+            }
+
+        }
+    }
+
+    return -1;
 }
