@@ -529,11 +529,11 @@ nh_composite_mcast_l2(unsigned short vrf, struct vr_packet *pkt,
             pkt_vrf = dir_nh->nh_vrf;
 
         } else if (dir_nh->nh_flags & NH_FLAG_COMPOSITE_EVPN) {
-    
+
             /* We replicate only if received from VM */
             if (pkt->vp_if->vif_type != VIF_TYPE_VIRTUAL)
                 continue;
-    
+
             /* Create head space for Vxlan header */
             clone_size = VR_L2_MCAST_PKT_HEAD_SPACE - VR_L2_MCAST_CTRL_DATA_LEN;
             if (!(new_pkt = nh_mcast_clone(pkt, clone_size))) {
