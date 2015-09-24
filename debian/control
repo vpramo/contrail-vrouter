@@ -1,0 +1,14 @@
+Source: contrail-vrouter
+Section: misc
+Priority: optional
+Maintainer: Overcast Pkgbuild Service <pkgbuild@overcastcloud.com>
+Build-Depends: debhelper (>= 9.0.0)
+Standards-Version: 3.9.4
+
+
+Package: contrail-vrouter
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Automatically built package
+ This package was built by Overcast package building service using
+ code from the testing
